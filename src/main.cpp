@@ -5,14 +5,14 @@
 #include <PID_AutoTune_v0.h>
 
 // Use software SPI: CS, DI, DO, CLK
-//Adafruit_MAX31865 thermo = Adafruit_MAX31865(10, 11, 12, 13);
+// Adafruit_MAX31865 thermo = Adafruit_MAX31865(10, 11, 12, 13);
 // use hardware SPI, just pass in the CS pin
 
 // CS-pinnit 16, 14, 12
 
 Adafruit_MAX31865 hltSensor = Adafruit_MAX31865(16, 0, 4, 5);
 Adafruit_MAX31865 mltSensor = Adafruit_MAX31865(14, 0, 4, 5);
-//Adafruit_MAX31865 bkSensor = Adafruit_MAX31865(12, 0, 4, 5);
+// Adafruit_MAX31865 bkSensor = Adafruit_MAX31865(12, 0, 4, 5);
 
 // RTD Module reference resistor value and sensor 0c nominal resistance
 #define RREF 430.0
@@ -42,6 +42,9 @@ struct vessel
   double Ki;
   double Kd;
   bool At = false;
+  bool On = false;
+  int windowSize = 2000;
+  unsigned long windowStartTime;
 };
 
 typedef struct vessel Vessel;
@@ -76,6 +79,7 @@ void sendJSON()
   hlt["I"] = HLT.Ki;
   hlt["D"] = HLT.Kd;
   hlt["tune"] = HLT.At;
+  hlt["on"] = HLT.On;
 
   mlt["sp"] = MLT.Setpoint;
   mlt["pv"] = MLT.Input;
@@ -92,6 +96,7 @@ void sendJSON()
   bk["I"] = BK.Ki;
   bk["D"] = BK.Kd;
   bk["tune"] = BK.At;
+  bk["on"] = BK.On;
 
   serializeJson(doc, Serial);
 }
@@ -108,7 +113,7 @@ void toggleAutotune(Vessel &vessel, PID &pid, PID_ATune &aTune)
 {
   if (!vessel.At)
   {
-    //Set the output to the desired starting frequency.
+    // Set the output to the desired starting frequency.
     vessel.Output = aTuneStartValue;
     aTune.SetNoiseBand(aTuneNoise);
     aTune.SetOutputStep(aTuneStep);
@@ -117,7 +122,7 @@ void toggleAutotune(Vessel &vessel, PID &pid, PID_ATune &aTune)
     vessel.At = true;
   }
   else
-  { //cancel autotune
+  { // cancel autotune
     aTune.Cancel();
     vessel.At = false;
     AutoTuneHelper(false, pid);
@@ -155,6 +160,13 @@ void readJSON()
       HLT.Ki = hlt["I"] ? hlt["I"].as<double>() : HLT.Ki;
       HLT.Kd = hlt["D"] ? hlt["D"].as<double>() : HLT.Kd;
 
+      // Power On/Off
+      if (hlt["on"] && hlt["on"].as<bool>() != HLT.On)
+      {
+        HLT.On = hlt["on"].as<bool>();
+      }
+
+      // Toggle autotune
       if (hlt["tune"] && hlt["tune"].as<bool>() != HLT.At)
       {
         HLT.At = hlt["tune"].as<bool>();
@@ -197,6 +209,13 @@ void readJSON()
       BK.Ki = bk["I"] ? bk["I"].as<double>() : BK.Ki;
       BK.Kd = bk["D"] ? bk["D"].as<double>() : BK.Kd;
 
+      // Power On/Off
+      if (bk["on"] && bk["on"].as<bool>() != BK.On)
+      {
+        BK.On = bk["on"].as<bool>();
+      }
+
+      // Toggle autotune
       if (bk["tune"] && bk["tune"].as<bool>() != BK.At)
       {
         BK.At = bk["tune"].as<bool>();
@@ -224,7 +243,7 @@ void setup()
 
   hltSensor.begin(MAX31865_4WIRE);
   mltSensor.begin(MAX31865_4WIRE);
-  //bkSensor.begin(MAX31865_4WIRE);
+  // bkSensor.begin(MAX31865_4WIRE);
 
   pinMode(HLT_SSR, OUTPUT);
   pinMode(BK_SSR, OUTPUT);
@@ -241,14 +260,14 @@ void loop()
   // Read temperature sensors
   hltSensor.readRTD();
   mltSensor.readRTD();
-  //bkSensor.readRTD();
+  // bkSensor.readRTD();
 
   HLT.Input = hltSensor.temperature(RNOMINAL, RREF);
   MLT.Input = mltSensor.temperature(RNOMINAL, RREF);
   BK.Input = hltSensor.temperature(RNOMINAL, RREF);
 
   // Send data as JSON through Serial
-  //sendJSON();
+  // sendJSON();
   Serial.println(HLT.Input);
   uint8_t fault = hltSensor.readFault();
 
@@ -394,6 +413,35 @@ void loop()
     }
   }
 
-  // Here we must put the calculation fier the SSR relayz according to the... proportional time unitz if you know what I mean
-  // Look it from teh orinal fuckbox code
+  if (HLT.On)
+  {
+    if (millis() - HLT.windowStartTime > HLT.windowSize)
+    {
+      HLT.windowStartTime += HLT.windowSize;
+    }
+    if (HLT.Output > millis() - HLT.windowStartTime)
+    {
+      digitalWrite(HLT_SSR, HIGH);
+    }
+    else
+    {
+      digitalWrite(HLT_SSR, LOW);
+    }
+  }
+
+  if (BK.On)
+  {
+    if (millis() - BK.windowStartTime > BK.windowSize)
+    {
+      BK.windowStartTime += BK.windowSize;
+    }
+    if (BK.Output > millis() - BK.windowStartTime)
+    {
+      digitalWrite(HLT_SSR, HIGH);
+    }
+    else
+    {
+      digitalWrite(HLT_SSR, LOW);
+    }
+  }
 }
